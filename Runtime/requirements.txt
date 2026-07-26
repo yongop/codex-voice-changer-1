@@ -14,4 +14,4 @@ scikit-learn==1.9.0
 scipy==1.17.1
 soundfile==0.14.0
 torchfcpe==0.0.4
-transformers==4.49.0
+transformers==5.5.0
