@@ -1,0 +1,34 @@
+TSUKUYOMI-CHAN OFFICIAL RVC MODEL NOTICE
+
+This software can bundle an RVC model made available at no charge by the
+free-material character つくよみちゃん (© Rei Yumesaki).
+
+Model:
+つくよみちゃん公式RVCモデル（通常1／CV.夢前黎）
+
+Official distribution:
+https://tyc.rei-yumesaki.net/work/software/rvc/
+
+Current model terms:
+https://tyc.rei-yumesaki.net/work/software/rvc/terms/
+
+The official RVC model is not covered by this project's MIT License. Use of
+the model is subject to its own terms. Those terms apply to the model portion
+without changing the license of the surrounding application.
+
+When audio converted with this model is published, credit both:
+
+1. The actual source voice or source voice-synthesis software.
+2. つくよみちゃん公式RVCモデル.
+
+Example:
+
+Original voice: my own voice
+Voice conversion: つくよみちゃん公式RVCモデル（通常1）
+
+Do not copy a fixed source-voice credit from this notice. The user must name
+the source that was actually converted and must also comply with that
+source's rights and terms.
+
+This notice was reviewed on 2026-07-27 against the official model terms
+updated 2026-06-27. The current official terms at the URL above control.

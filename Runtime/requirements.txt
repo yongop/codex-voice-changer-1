@@ -1,0 +1,17 @@
+# Runtime dependencies verified on Apple Silicon with Python 3.11.
+torch==2.7.1
+torchaudio==2.7.1
+av==15.1.0
+einops==0.8.2
+faiss-cpu==1.14.3
+ffmpeg-python==0.2.0
+hyper-connections==0.4.2
+librosa==0.10.2.post1
+local-attention==1.11.2
+numpy==1.26.4
+praat-parselmouth==0.4.7
+scikit-learn==1.9.0
+scipy==1.17.1
+soundfile==0.14.0
+torchfcpe==0.0.4
+transformers==4.49.0

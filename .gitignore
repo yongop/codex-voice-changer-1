@@ -1,0 +1,66 @@
+# Swift / Xcode build products
+.build/
+DerivedData/
+dist/
+*.app/
+*.dSYM/
+*.xcarchive/
+*.xcuserstate
+xcuserdata/
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+
+# Local Python environments and caches
+.rvc_env/
+.vc_env/
+.voice_analysis_env/
+.target_llvc_env/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Downloaded runtimes, official models, and generated artifacts
+.training_cache/
+outputs/
+*.pth
+*.pt
+*.bin
+*.mlmodelc/
+*.mlpackage/
+
+# Local research material (not part of the public application)
+voice_analysis_work/
+voice_training/
+VOICE_RESEARCH.md
+
+# Audio/video source material and previews
+*.wav
+*.wave
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.mp4
+*.mov
+
+# Download archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.secrets.*

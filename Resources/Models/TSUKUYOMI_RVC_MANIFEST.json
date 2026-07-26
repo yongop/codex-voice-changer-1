@@ -1,0 +1,39 @@
+{
+  "id": "tsukuyomi_rvc_normal1_pitch5",
+  "display_name": "츠쿠요미짱 RVC · 通常1 +5",
+  "rvc_commit": "4338f12c3c28c80b3ac015e2d0df66c41592746d",
+  "model": {
+    "file": "tsukuyomi_01.pth",
+    "sha256": "cd4996435d0e9c9f93858a13d9ddf5442a011388478daab1f732e0ac2b2c4020",
+    "official_version": "1.0.0",
+    "official_archive_sha256": "1207590e7bac95bbbdeeced54714933390d73f0f7795a8f97fa1be60e542f201",
+    "version": "v2",
+    "sample_rate": 40000,
+    "f0": true
+  },
+  "hubert": {
+    "file": "runtime/assets/hubert_base/pytorch_model.bin",
+    "sha256": "cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5"
+  },
+  "rmvpe": {
+    "file": "runtime/assets/rmvpe/rmvpe.pt",
+    "sha256": "6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193"
+  },
+  "streaming": {
+    "device": "mps",
+    "precision": "float16",
+    "pitch_shift_semitones": 5,
+    "f0_method": "rmvpe",
+    "index_rate": 0.0,
+    "block_seconds": 0.22,
+    "crossfade_seconds": 0.05,
+    "extra_context_seconds": 2.5,
+    "sola_search_seconds": 0.01,
+    "scheduling_reserve_seconds": 0.06,
+    "fallback": "presentation-aligned source with 8 ms crossfade",
+    "stalled_stream_reset_seconds": 0.12
+  },
+  "source": "https://tyc.rei-yumesaki.net/work/software/rvc/",
+  "terms": "https://tyc.rei-yumesaki.net/work/software/rvc/terms/",
+  "terms_reviewed": "2026-07-27"
+}
