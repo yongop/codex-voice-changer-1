@@ -349,7 +349,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pitch", type=int, default=5)
     parser.add_argument("--block-seconds", type=float, default=0.22)
     parser.add_argument("--crossfade-seconds", type=float, default=0.05)
-    parser.add_argument("--extra-seconds", type=float, default=2.5)
+    # HuBERT re-encodes the whole context window every block, so the extra
+    # context length dominates per-block inference time. 1.2 s keeps ample
+    # left context while roughly halving the 2.5 s default's compute.
+    parser.add_argument("--extra-seconds", type=float, default=1.2)
     parser.add_argument("--warmup-iterations", type=int, default=3)
     return parser.parse_args()
 

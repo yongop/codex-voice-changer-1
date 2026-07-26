@@ -34,9 +34,25 @@ struct CVSRVCProcessor {
   uint32_t dryDelayMask;
   uint_fast64_t dryWriteIndex = 0;
   uint_fast64_t underrunFrames = 0;
+  uint_fast64_t pendingDropFrames = 0;
+  uint_fast64_t cleanFrames = 0;
+  uint32_t underrunEpisodes = 0;
+  bool convertedActive = false;
+  bool resumeGuardActive = false;
   float convertedMix = 0;
   float lastConvertedSample = 0;
   bool recoveryRequested = false;
+
+  uint32_t resumeGuardFrames() const {
+    return static_cast<uint32_t>(sampleRate * 0.05f);
+  }
+  uint_fast64_t cleanWindowFrames() const {
+    return static_cast<uint_fast64_t>(sampleRate * 10.0f);
+  }
+  uint_fast64_t watchdogFrames() const {
+    return static_cast<uint_fast64_t>(sampleRate * 1.5f);
+  }
+  static constexpr uint32_t kUnderrunEpisodeLimit = 3;
 
   CVSRVCProcessor(CVSAudioBridge *audioBridge,
                   CVSNeuralTransport *rvcTransport, double rate,
@@ -131,6 +147,11 @@ struct CVSRVCProcessor {
     if (CVSNeuralTransportTakeOutputDiscardRequest(transport)) {
       CVSNeuralTransportDiscardOutput(transport);
       underrunFrames = 0;
+      pendingDropFrames = 0;
+      cleanFrames = 0;
+      underrunEpisodes = 0;
+      convertedActive = false;
+      resumeGuardActive = false;
       convertedMix = 0;
       lastConvertedSample = 0;
       // The worker publishes this request only after acknowledging a reset
@@ -139,32 +160,79 @@ struct CVSRVCProcessor {
     }
 
     status = CVSNeuralTransportGetStatus(transport);
-    bool convertedReady =
-        status == CVSNeuralStatusReady && !recoveryRequested &&
-        CVSNeuralTransportAvailableOutput(transport) >= frameCount;
-    if (convertedReady) {
-      convertedReady =
-          CVSNeuralTransportPopOutput(transport, rvcOutput.data(), frameCount) ==
-          frameCount;
+    bool streamReady = status == CVSNeuralStatusReady && !recoveryRequested;
+    bool convertedReady = false;
+    if (streamReady) {
+      // Converted frames whose presentation slots the dry fallback already
+      // covered are discarded so the converted stream stays aligned with the
+      // shared presentation clock instead of accumulating extra latency.
+      while (pendingDropFrames > 0) {
+        uint32_t chunk = pendingDropFrames < maxFrames
+                             ? static_cast<uint32_t>(pendingDropFrames)
+                             : maxFrames;
+        uint32_t dropped =
+            CVSNeuralTransportPopOutput(transport, rvcOutput.data(), chunk);
+        if (dropped == 0) {
+          break;
+        }
+        pendingDropFrames -= dropped;
+      }
+      if (pendingDropFrames == 0) {
+        uint32_t needed = frameCount;
+        if (!convertedActive && resumeGuardActive) {
+          needed += resumeGuardFrames();
+        }
+        if (CVSNeuralTransportAvailableOutput(transport) >= needed) {
+          convertedReady = CVSNeuralTransportPopOutput(
+                               transport, rvcOutput.data(), frameCount) ==
+                           frameCount;
+        }
+      }
     }
 
     if (convertedReady) {
+      convertedActive = true;
+      resumeGuardActive = false;
       underrunFrames = 0;
-      recoveryRequested = false;
+      cleanFrames += frameCount;
+      if (cleanFrames >= cleanWindowFrames()) {
+        underrunEpisodes = 0;
+      }
       mixConverted(frameCount);
     } else {
-      mixFallback(frameCount);
-      if (status == CVSNeuralStatusReady && !recoveryRequested) {
-        underrunFrames += frameCount;
-        if (underrunFrames >=
-            static_cast<uint_fast64_t>(sampleRate * 0.12f)) {
-          CVSNeuralTransportRequestStreamReset(transport);
-          recoveryRequested = true;
-          underrunFrames = 0;
+      if (streamReady) {
+        if (convertedActive) {
+          convertedActive = false;
+          resumeGuardActive = true;
+          cleanFrames = 0;
+          underrunEpisodes++;
+          if (underrunEpisodes >= kUnderrunEpisodeLimit) {
+            // Repeated dropouts mean the scheduling margin is too thin for
+            // the current machine load. Rebuild the stream; the worker primes
+            // a deeper output buffer after every mid-stream rebuild.
+            CVSNeuralTransportRequestStreamReset(transport);
+            recoveryRequested = true;
+            underrunEpisodes = 0;
+            pendingDropFrames = 0;
+            underrunFrames = 0;
+          }
         }
-      } else if (status != CVSNeuralStatusReady) {
+        if (!recoveryRequested) {
+          pendingDropFrames += frameCount;
+          underrunFrames += frameCount;
+          if (underrunFrames >= watchdogFrames()) {
+            CVSNeuralTransportRequestStreamReset(transport);
+            recoveryRequested = true;
+            underrunFrames = 0;
+            pendingDropFrames = 0;
+          }
+        }
+      } else {
         underrunFrames = 0;
+        pendingDropFrames = 0;
+        convertedActive = false;
       }
+      mixFallback(frameCount);
     }
 
     if (outputData->mNumberBuffers >= 2) {
