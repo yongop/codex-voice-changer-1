@@ -78,6 +78,13 @@ CVSNeuralStatus CVSNeuralTransportGetStatus(
 void CVSNeuralTransportSetMetrics(CVSNeuralTransport *_Nonnull transport,
                                   uint32_t latencyFrames,
                                   uint32_t inferenceMicroseconds);
+void CVSNeuralTransportSetOutputBufferTargets(
+    CVSNeuralTransport *_Nonnull transport, uint32_t targetFrames,
+    uint32_t maximumFrames);
+uint32_t CVSNeuralTransportTargetOutputFrames(
+    CVSNeuralTransport *_Nonnull transport);
+uint32_t CVSNeuralTransportMaximumOutputFrames(
+    CVSNeuralTransport *_Nonnull transport);
 uint32_t CVSNeuralTransportLatencyFrames(
     CVSNeuralTransport *_Nonnull transport);
 uint32_t CVSNeuralTransportInferenceMicroseconds(

@@ -29,7 +29,7 @@ final class RVCPlaybackEngine {
     }
     guard
       let createdTransport = CVSNeuralTransportCreate(
-        UInt32(min(max(sampleRate * 1.25, 32_768), 131_072))
+        UInt32(min(max(sampleRate * 1.25, 32_768), 262_144))
       )
     else {
       throw VoiceChangerError.bufferAllocation

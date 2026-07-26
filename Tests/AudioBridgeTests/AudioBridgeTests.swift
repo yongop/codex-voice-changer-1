@@ -1,7 +1,8 @@
 import AudioBridge
 import AudioToolbox
-@testable import CodexVoiceChanger1
 import XCTest
+
+@testable import CodexVoiceChanger1
 
 final class AudioBridgeTests: XCTestCase {
   func testRoundTripStereoSamples() throws {
@@ -91,6 +92,9 @@ final class AudioBridgeTests: XCTestCase {
     )
     XCTAssertEqual(CVSNeuralTransportAvailableInput(transport), 4)
     XCTAssertEqual(CVSNeuralTransportDroppedInputFrames(transport), 2)
+    CVSNeuralTransportSetOutputBufferTargets(transport, 8, 4)
+    XCTAssertEqual(CVSNeuralTransportTargetOutputFrames(transport), 4)
+    XCTAssertEqual(CVSNeuralTransportMaximumOutputFrames(transport), 4)
 
     var output = [Float](repeating: 0, count: 4)
     XCTAssertEqual(
@@ -104,6 +108,93 @@ final class AudioBridgeTests: XCTestCase {
       4
     )
     XCTAssertEqual(output, [1, 2, 3, 4])
+  }
+
+  func testRingCopiesPreserveSamplesAcrossWrapBoundary() throws {
+    let transport = try XCTUnwrap(CVSNeuralTransportCreate(4))
+    defer { CVSNeuralTransportDestroy(transport) }
+    let first: [Float] = [1, 2, 3]
+    XCTAssertEqual(
+      first.withUnsafeBufferPointer {
+        CVSNeuralTransportPushInput(
+          transport,
+          $0.baseAddress!,
+          UInt32($0.count)
+        )
+      },
+      3
+    )
+    var discarded = [Float](repeating: 0, count: 2)
+    XCTAssertEqual(
+      discarded.withUnsafeMutableBufferPointer {
+        CVSNeuralTransportPopInput(
+          transport,
+          $0.baseAddress!,
+          UInt32($0.count)
+        )
+      },
+      2
+    )
+    let wrapped: [Float] = [4, 5, 6]
+    XCTAssertEqual(
+      wrapped.withUnsafeBufferPointer {
+        CVSNeuralTransportPushInput(
+          transport,
+          $0.baseAddress!,
+          UInt32($0.count)
+        )
+      },
+      3
+    )
+    var result = [Float](repeating: 0, count: 4)
+    XCTAssertEqual(
+      result.withUnsafeMutableBufferPointer {
+        CVSNeuralTransportPopInput(
+          transport,
+          $0.baseAddress!,
+          UInt32($0.count)
+        )
+      },
+      4
+    )
+    XCTAssertEqual(result, [3, 4, 5, 6])
+
+    let bridge = try XCTUnwrap(CVSAudioBridgeCreate(4))
+    defer { CVSAudioBridgeDestroy(bridge) }
+    let firstStereo: [Float] = [1, -1, 2, -2, 3, -3]
+    _ = firstStereo.withUnsafeBufferPointer {
+      CVSAudioBridgeWriteTestStereo(bridge, $0.baseAddress!, 3)
+    }
+    var leftDiscard = [Float](repeating: 0, count: 2)
+    var rightDiscard = [Float](repeating: 0, count: 2)
+    _ = leftDiscard.withUnsafeMutableBufferPointer { left in
+      rightDiscard.withUnsafeMutableBufferPointer { right in
+        CVSAudioBridgeReadPlanar(
+          bridge,
+          left.baseAddress!,
+          right.baseAddress!,
+          2
+        )
+      }
+    }
+    let wrappedStereo: [Float] = [4, -4, 5, -5, 6, -6]
+    _ = wrappedStereo.withUnsafeBufferPointer {
+      CVSAudioBridgeWriteTestStereo(bridge, $0.baseAddress!, 3)
+    }
+    var left = [Float](repeating: 0, count: 4)
+    var right = [Float](repeating: 0, count: 4)
+    _ = left.withUnsafeMutableBufferPointer { leftPointer in
+      right.withUnsafeMutableBufferPointer { rightPointer in
+        CVSAudioBridgeReadPlanar(
+          bridge,
+          leftPointer.baseAddress!,
+          rightPointer.baseAddress!,
+          4
+        )
+      }
+    }
+    XCTAssertEqual(left, [3, 4, 5, 6])
+    XCTAssertEqual(right, [-3, -4, -5, -6])
   }
 
   func testRVCUnderrunFallsBackToDryAudioAndRecovers() throws {
@@ -140,6 +231,11 @@ final class AudioBridgeTests: XCTestCase {
       UInt32(totalFrames)
     )
     CVSNeuralTransportSetMetrics(transport, 512, 125_000)
+    CVSNeuralTransportSetOutputBufferTargets(
+      transport,
+      UInt32(quantum * 4),
+      UInt32(quantum * 8)
+    )
     CVSNeuralTransportSetStatus(transport, CVSNeuralStatusWarmingUp)
 
     var fallbackLeft = [Float](repeating: 0, count: quantum)
@@ -190,9 +286,8 @@ final class AudioBridgeTests: XCTestCase {
     XCTAssertGreaterThan(fallbackLeft.min() ?? 0, 0.2)
     XCTAssertGreaterThan(fallbackRight.min() ?? 0, 0.2)
 
-    // Recovery drops the frames the dry fallback already presented (5
-    // quanta) and additionally waits for the resume guard (50 ms) before
-    // switching back, so the recovery push must cover drop + guard + render.
+    // Recovery drops the frames the dry fallback already presented and
+    // restores the complete four-quantum startup margin before switching.
     let recovered = [Float](
       repeating: -0.6,
       count: quantum * 20
@@ -236,6 +331,11 @@ final class AudioBridgeTests: XCTestCase {
     defer { CVSRVCProcessorDestroy(processor) }
 
     CVSNeuralTransportSetMetrics(transport, 512, 125_000)
+    CVSNeuralTransportSetOutputBufferTargets(
+      transport,
+      UInt32(quantum * 4),
+      UInt32(quantum * 8)
+    )
     CVSNeuralTransportSetStatus(transport, CVSNeuralStatusReady)
 
     let dry = [Float](repeating: 0.25, count: quantum * 2)
@@ -243,9 +343,9 @@ final class AudioBridgeTests: XCTestCase {
     var left = [Float](repeating: 0, count: quantum)
     var right = [Float](repeating: 0, count: quantum)
 
-    // Isolated dropouts must recover without a rebuild; only the third
-    // dropout without a long clean stretch escalates to a stream reset.
-    for episode in 0..<3 {
+    // One isolated dropout re-buffers in place. A second dropout without a
+    // clean stretch asks the worker for a deeper startup margin.
+    for episode in 0..<2 {
       XCTAssertFalse(
         CVSNeuralTransportTakeStreamResetRequest(transport),
         "episode \(episode) escalated too early"
@@ -280,6 +380,60 @@ final class AudioBridgeTests: XCTestCase {
       )
     }
     XCTAssertTrue(CVSNeuralTransportTakeStreamResetRequest(transport))
+  }
+
+  func testMaximumOutputMarginDoesNotTriggerFutileRebuilds() throws {
+    let sampleRate = 48_000.0
+    let quantum = 512
+    let bridge = try XCTUnwrap(CVSAudioBridgeCreate(16_384))
+    defer { CVSAudioBridgeDestroy(bridge) }
+    let transport = try XCTUnwrap(
+      CVSNeuralTransportCreate(65_536)
+    )
+    defer { CVSNeuralTransportDestroy(transport) }
+    let processor = try XCTUnwrap(
+      CVSRVCProcessorCreate(
+        bridge,
+        transport,
+        sampleRate,
+        UInt32(quantum)
+      )
+    )
+    defer { CVSRVCProcessorDestroy(processor) }
+
+    CVSNeuralTransportSetMetrics(transport, 512, 125_000)
+    CVSNeuralTransportSetOutputBufferTargets(
+      transport,
+      UInt32(quantum * 4),
+      UInt32(quantum * 4)
+    )
+    CVSNeuralTransportSetStatus(transport, CVSNeuralStatusReady)
+
+    let dry = [Float](repeating: 0.25, count: quantum * 2)
+    let converted = [Float](repeating: 0.9, count: quantum * 12)
+    var left = [Float](repeating: 0, count: quantum)
+    var right = [Float](repeating: 0, count: quantum)
+
+    for _ in 0..<3 {
+      _ = converted.withUnsafeBufferPointer {
+        CVSNeuralTransportPushOutput(
+          transport,
+          $0.baseAddress!,
+          UInt32($0.count)
+        )
+      }
+      for _ in 0..<14 {
+        _ = dry.withUnsafeBufferPointer {
+          CVSAudioBridgeWriteTestStereo(
+            bridge,
+            $0.baseAddress!,
+            UInt32(quantum)
+          )
+        }
+        render(processor: processor, left: &left, right: &right)
+      }
+      XCTAssertFalse(CVSNeuralTransportTakeStreamResetRequest(transport))
+    }
   }
 
   func testSustainedRVCUnderrunRequestsFreshStreamWithoutSilence() throws {

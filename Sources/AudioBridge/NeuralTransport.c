@@ -18,6 +18,8 @@ struct CVSNeuralTransport {
   _Atomic int status;
   _Atomic uint32_t latencyFrames;
   _Atomic uint32_t inferenceMicroseconds;
+  _Atomic uint32_t targetOutputFrames;
+  _Atomic uint32_t maximumOutputFrames;
   _Atomic bool outputDiscardRequested;
   _Atomic bool streamResetRequested;
 };
@@ -71,8 +73,16 @@ static uint32_t ringWrite(CVSMonoRing *ring, const float *samples,
   uint32_t framesToWrite =
       frameCount < freeFrames ? frameCount : freeFrames;
   uint32_t mask = ring->capacity - 1;
-  for (uint32_t frame = 0; frame < framesToWrite; frame++) {
-    ring->samples[(uint32_t)(write + frame) & mask] = samples[frame];
+  uint32_t start = (uint32_t)write & mask;
+  uint32_t first =
+      framesToWrite < ring->capacity - start ? framesToWrite
+                                             : ring->capacity - start;
+  if (first > 0) {
+    memcpy(ring->samples + start, samples, first * sizeof(float));
+  }
+  uint32_t second = framesToWrite - first;
+  if (second > 0) {
+    memcpy(ring->samples, samples + first, second * sizeof(float));
   }
   if (framesToWrite > 0) {
     atomic_store_explicit(&ring->writeIndex, write + framesToWrite,
@@ -99,8 +109,16 @@ static uint32_t ringRead(CVSMonoRing *ring, float *samples,
   uint32_t framesToRead =
       available < frameCount ? (uint32_t)available : frameCount;
   uint32_t mask = ring->capacity - 1;
-  for (uint32_t frame = 0; frame < framesToRead; frame++) {
-    samples[frame] = ring->samples[(uint32_t)(read + frame) & mask];
+  uint32_t start = (uint32_t)read & mask;
+  uint32_t first = framesToRead < ring->capacity - start
+                       ? framesToRead
+                       : ring->capacity - start;
+  if (first > 0) {
+    memcpy(samples, ring->samples + start, first * sizeof(float));
+  }
+  uint32_t second = framesToRead - first;
+  if (second > 0) {
+    memcpy(samples + first, ring->samples, second * sizeof(float));
   }
   if (framesToRead > 0) {
     atomic_store_explicit(&ring->readIndex, read + framesToRead,
@@ -131,6 +149,8 @@ CVSNeuralTransport *CVSNeuralTransportCreate(uint32_t capacityFrames) {
   atomic_init(&transport->status, CVSNeuralStatusDisabled);
   atomic_init(&transport->latencyFrames, 0);
   atomic_init(&transport->inferenceMicroseconds, 0);
+  atomic_init(&transport->targetOutputFrames, 0);
+  atomic_init(&transport->maximumOutputFrames, 0);
   atomic_init(&transport->outputDiscardRequested, false);
   atomic_init(&transport->streamResetRequested, false);
   return transport;
@@ -238,6 +258,10 @@ void CVSNeuralTransportReset(CVSNeuralTransport *transport) {
   atomic_store_explicit(&transport->latencyFrames, 0, memory_order_relaxed);
   atomic_store_explicit(&transport->inferenceMicroseconds, 0,
                         memory_order_relaxed);
+  atomic_store_explicit(&transport->targetOutputFrames, 0,
+                        memory_order_relaxed);
+  atomic_store_explicit(&transport->maximumOutputFrames, 0,
+                        memory_order_relaxed);
   atomic_store_explicit(&transport->outputDiscardRequested, false,
                         memory_order_relaxed);
   atomic_store_explicit(&transport->streamResetRequested, false,
@@ -269,6 +293,36 @@ void CVSNeuralTransportSetMetrics(CVSNeuralTransport *transport,
                         memory_order_release);
   atomic_store_explicit(&transport->inferenceMicroseconds,
                         inferenceMicroseconds, memory_order_release);
+}
+
+void CVSNeuralTransportSetOutputBufferTargets(
+    CVSNeuralTransport *transport, uint32_t targetFrames,
+    uint32_t maximumFrames) {
+  if (transport == NULL) {
+    return;
+  }
+  uint32_t boundedTarget =
+      targetFrames < maximumFrames ? targetFrames : maximumFrames;
+  atomic_store_explicit(&transport->maximumOutputFrames, maximumFrames,
+                        memory_order_release);
+  atomic_store_explicit(&transport->targetOutputFrames, boundedTarget,
+                        memory_order_release);
+}
+
+uint32_t
+CVSNeuralTransportTargetOutputFrames(CVSNeuralTransport *transport) {
+  return transport == NULL
+             ? 0
+             : atomic_load_explicit(&transport->targetOutputFrames,
+                                    memory_order_acquire);
+}
+
+uint32_t
+CVSNeuralTransportMaximumOutputFrames(CVSNeuralTransport *transport) {
+  return transport == NULL
+             ? 0
+             : atomic_load_explicit(&transport->maximumOutputFrames,
+                                    memory_order_acquire);
 }
 
 uint32_t CVSNeuralTransportLatencyFrames(CVSNeuralTransport *transport) {

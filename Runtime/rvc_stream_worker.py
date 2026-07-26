@@ -3,7 +3,8 @@
 
 Protocol on stdin/stdout (little-endian):
 
-* startup response: ``RDY1`` + uint32 sample-rate + uint32 block-frames
+* startup response: ``RDY2`` + uint32 sample-rate + uint32 block-frames
+  + uint32 stable-warmup-microseconds
 * input frame: ``FRM1`` + block-frames float32 samples
 * output frame: ``OUT1`` + uint32 inference-microseconds + float32 samples
 * reset request/response: ``RST1`` / ``ACK1``
@@ -33,6 +34,7 @@ import torch
 import torch.nn.functional as torch_functional
 from torchaudio.transforms import Resample
 
+torch.set_num_interop_threads(1)
 
 MODEL_SHA256 = (
     "cd4996435d0e9c9f93858a13d9ddf5442a011388478daab1f732e0ac2b2c4020"
@@ -85,6 +87,18 @@ def read_exact(stream, count: int) -> bytes | None:
             return None if not result else bytes(result)
         result.extend(block)
     return bytes(result)
+
+
+def read_exact_into(stream, buffer: bytearray) -> bool:
+    """Fill a reusable protocol buffer without allocating a payload object."""
+    view = memoryview(buffer)
+    offset = 0
+    while offset < len(view):
+        count = stream.readinto(view[offset:])
+        if not count:
+            return False
+        offset += count
+    return True
 
 
 def write_error(stream, error: BaseException) -> None:
@@ -174,6 +188,11 @@ class StreamingRVCProcessor:
             device=self.device,
             dtype=torch.float32,
         )
+        self.block_input = torch.empty(
+            self.block_frame,
+            device=self.device,
+            dtype=torch.float32,
+        )
         self.resample_input = torch.zeros(
             self.block_frame + 2 * self.zc,
             device=self.device,
@@ -214,6 +233,25 @@ class StreamingRVCProcessor:
             ** 2
         )
         self.fade_out = 1 - self.fade_in
+        self.silent_output = np.zeros(self.block_frame, dtype=np.float32)
+        self.output_host = torch.empty(
+            self.block_frame,
+            device="cpu",
+            dtype=torch.float32,
+        )
+        self.output_numpy = self.output_host.numpy()
+        # Codex voice output contains long, near-digital-silence gaps. Avoid
+        # running HuBERT + RMVPE + the synthesizer for inaudible blocks while
+        # retaining two RVC blocks after speech so phrase endings and breaths
+        # decay naturally. The -80 dBFS RMS gate is far below quiet speech.
+        self.silence_rms_squared = 1e-8
+        self.silence_peak = 5e-4
+        self.silence_hangover_blocks = max(
+            2,
+            round(0.35 / self.block_duration_seconds),
+        )
+        self.silence_hangover_remaining = 0
+        self.pending_silent_frames_16k = 0
         self.input_resampler = Resample(
             orig_freq=sample_rate,
             new_freq=16_000,
@@ -235,8 +273,17 @@ class StreamingRVCProcessor:
         warmup = 0.01 * np.sin(
             2 * np.pi * 160 * phase / sample_rate
         ).astype(np.float32)
+        warmup_microseconds = []
         for _ in range(max(1, warmup_iterations)):
+            started = time.perf_counter_ns()
             self.process(warmup)
+            warmup_microseconds.append(
+                (time.perf_counter_ns() - started) // 1_000
+            )
+        self.stable_warmup_microseconds = min(
+            warmup_microseconds[-1],
+            0xFFFFFFFF,
+        )
         self.reset()
 
     @property
@@ -251,8 +298,70 @@ class StreamingRVCProcessor:
         self.sola_buffer.zero_()
         self.rvc.cache_pitch.zero_()
         self.rvc.cache_pitchf.zero_()
+        self.silence_hangover_remaining = 0
+        self.pending_silent_frames_16k = 0
         if torch.backends.mps.is_available():
             torch.mps.synchronize()
+
+    def should_bypass_silence(self, input_audio: np.ndarray) -> bool:
+        peak = max(
+            -float(np.min(input_audio, initial=0.0)),
+            float(np.max(input_audio, initial=0.0)),
+        )
+        mean_square = float(np.dot(input_audio, input_audio) / input_audio.size)
+        silent = (
+            peak <= self.silence_peak
+            and mean_square <= self.silence_rms_squared
+        )
+        if not silent:
+            self.silence_hangover_remaining = self.silence_hangover_blocks
+            return False
+        if self.silence_hangover_remaining > 0:
+            self.silence_hangover_remaining -= 1
+            return False
+        return True
+
+    def flush_pending_silence(self) -> None:
+        pending = min(
+            self.pending_silent_frames_16k,
+            self.input_wav_resampled.shape[0],
+        )
+        if pending <= 0:
+            return
+        if pending >= self.input_wav_resampled.shape[0]:
+            self.input_wav_resampled.zero_()
+        else:
+            self.next_input_wav_resampled[:-pending].copy_(
+                self.input_wav_resampled[pending:]
+            )
+            self.next_input_wav_resampled[-pending:].zero_()
+            (
+                self.input_wav_resampled,
+                self.next_input_wav_resampled,
+            ) = (
+                self.next_input_wav_resampled,
+                self.input_wav_resampled,
+            )
+        self.input_overlap.zero_()
+        self.resample_input.zero_()
+        self.sola_buffer.zero_()
+        pitch_shift = min(
+            pending // 160,
+            self.rvc.cache_pitch.shape[0],
+        )
+        if pending >= self.input_wav_resampled.shape[0]:
+            self.rvc.cache_pitch.zero_()
+            self.rvc.cache_pitchf.zero_()
+        elif pitch_shift > 0:
+            self.rvc.cache_pitch[:-pitch_shift].copy_(
+                self.rvc.cache_pitch[pitch_shift:].clone()
+            )
+            self.rvc.cache_pitch[-pitch_shift:].fill_(1)
+            self.rvc.cache_pitchf[:-pitch_shift].copy_(
+                self.rvc.cache_pitchf[pitch_shift:].clone()
+            )
+            self.rvc.cache_pitchf[-pitch_shift:].zero_()
+        self.pending_silent_frames_16k = 0
 
     def process(self, input_audio: np.ndarray) -> np.ndarray:
         if input_audio.shape != (self.block_frame,):
@@ -263,15 +372,23 @@ class StreamingRVCProcessor:
         if not np.isfinite(input_audio).all():
             input_audio = np.nan_to_num(
                 input_audio,
+                copy=False,
                 nan=0.0,
                 posinf=1.0,
                 neginf=-1.0,
             )
 
+        if self.should_bypass_silence(input_audio):
+            self.pending_silent_frames_16k = min(
+                self.input_wav_resampled.shape[0],
+                self.pending_silent_frames_16k + self.block_frame_16k,
+            )
+            return self.silent_output
+
         with torch.inference_mode():
-            block = torch.from_numpy(
-                np.array(input_audio, dtype=np.float32, copy=True)
-            ).to(self.device)
+            self.flush_pending_silence()
+            self.block_input.copy_(torch.from_numpy(input_audio))
+            block = self.block_input
             self.resample_input[: 2 * self.zc].copy_(self.input_overlap)
             self.resample_input[2 * self.zc :].copy_(block)
             self.input_overlap.copy_(block[-2 * self.zc :])
@@ -338,7 +455,8 @@ class StreamingRVCProcessor:
                 posinf=1.0,
                 neginf=-1.0,
             ).clamp(-1, 1)
-            return output.cpu().numpy().astype(np.float32, copy=False)
+            self.output_host.copy_(output)
+            return self.output_numpy
 
 
 def parse_args() -> argparse.Namespace:
@@ -382,16 +500,19 @@ def main() -> None:
             warmup_iterations=args.warmup_iterations,
         )
         binary_output.write(
-            b"RDY1"
+            b"RDY2"
             + struct.pack(
-                "<II",
+                "<III",
                 processor.sample_rate,
                 processor.block_frame,
+                processor.stable_warmup_microseconds,
             )
         )
         binary_output.flush()
 
         byte_count = processor.block_frame * np.dtype("<f4").itemsize
+        payload_buffer = bytearray(byte_count)
+        audio = np.frombuffer(payload_buffer, dtype="<f4")
         while True:
             command = read_exact(binary_input, 4)
             if command is None:
@@ -406,13 +527,8 @@ def main() -> None:
             if command != b"FRM1":
                 raise RuntimeError(f"Unknown worker command: {command!r}")
 
-            payload = read_exact(binary_input, byte_count)
-            if payload is None or len(payload) != byte_count:
+            if not read_exact_into(binary_input, payload_buffer):
                 raise EOFError("Incomplete PCM input block.")
-            audio = np.frombuffer(payload, dtype="<f4").astype(
-                np.float32,
-                copy=False,
-            )
             started = time.perf_counter_ns()
             output = processor.process(audio)
             elapsed_microseconds = min(
@@ -420,9 +536,10 @@ def main() -> None:
                 0xFFFFFFFF,
             )
             binary_output.write(
-                b"OUT1"
-                + struct.pack("<I", elapsed_microseconds)
-                + output.astype("<f4", copy=False).tobytes()
+                b"OUT1" + struct.pack("<I", elapsed_microseconds)
+            )
+            binary_output.write(
+                memoryview(output.astype("<f4", copy=False)).cast("B")
             )
             binary_output.flush()
     except BaseException as error:

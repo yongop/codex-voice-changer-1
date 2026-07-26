@@ -53,12 +53,18 @@ static uint32_t writeStereo(CVSAudioBridge *bridge, const float *interleaved,
   frameCount = writableFrames(bridge, write, read, frameCount);
 
   uint32_t mask = bridge->capacity - 1;
-  for (uint32_t frame = 0; frame < frameCount; frame++) {
-    uint32_t destination = (uint32_t)((write + frame) & mask) * 2;
-    float left = interleaved[frame * 2];
-    float right = interleaved[frame * 2 + 1];
-    bridge->samples[destination] = left;
-    bridge->samples[destination + 1] = right;
+  uint32_t start = (uint32_t)write & mask;
+  uint32_t first = frameCount < bridge->capacity - start
+                       ? frameCount
+                       : bridge->capacity - start;
+  if (first > 0) {
+    memcpy(bridge->samples + (size_t)start * 2, interleaved,
+           (size_t)first * 2 * sizeof(float));
+  }
+  uint32_t second = frameCount - first;
+  if (second > 0) {
+    memcpy(bridge->samples, interleaved + (size_t)first * 2,
+           (size_t)second * 2 * sizeof(float));
   }
 
   atomic_store_explicit(&bridge->writeIndex, write + frameCount,

@@ -43,8 +43,15 @@ struct CVSRVCProcessor {
   float lastConvertedSample = 0;
   bool recoveryRequested = false;
 
-  uint32_t resumeGuardFrames() const {
-    return static_cast<uint32_t>(sampleRate * 0.05f);
+  uint32_t recoveryTargetFrames() const {
+    uint32_t target = CVSNeuralTransportTargetOutputFrames(transport);
+    return target > 0 ? target
+                      : static_cast<uint32_t>(sampleRate * 0.05f);
+  }
+  bool canIncreaseOutputMargin() const {
+    uint32_t target = CVSNeuralTransportTargetOutputFrames(transport);
+    uint32_t maximum = CVSNeuralTransportMaximumOutputFrames(transport);
+    return maximum == 0 || target < maximum;
   }
   uint_fast64_t cleanWindowFrames() const {
     return static_cast<uint_fast64_t>(sampleRate * 10.0f);
@@ -52,7 +59,7 @@ struct CVSRVCProcessor {
   uint_fast64_t watchdogFrames() const {
     return static_cast<uint_fast64_t>(sampleRate * 1.5f);
   }
-  static constexpr uint32_t kUnderrunEpisodeLimit = 3;
+  static constexpr uint32_t kUnderrunEpisodeLimit = 2;
 
   CVSRVCProcessor(CVSAudioBridge *audioBridge,
                   CVSNeuralTransport *rvcTransport, double rate,
@@ -180,7 +187,10 @@ struct CVSRVCProcessor {
       if (pendingDropFrames == 0) {
         uint32_t needed = frameCount;
         if (!convertedActive && resumeGuardActive) {
-          needed += resumeGuardFrames();
+          // Restore the same complete jitter margin used at initial startup
+          // before returning to converted audio. A fixed 50 ms guard resumed
+          // too eagerly and caused repeated dry/converted alternation.
+          needed = std::max(needed, recoveryTargetFrames());
         }
         if (CVSNeuralTransportAvailableOutput(transport) >= needed) {
           convertedReady = CVSNeuralTransportPopOutput(
@@ -194,7 +204,8 @@ struct CVSRVCProcessor {
       convertedActive = true;
       resumeGuardActive = false;
       underrunFrames = 0;
-      cleanFrames += frameCount;
+      cleanFrames =
+          std::min(cleanFrames + frameCount, cleanWindowFrames());
       if (cleanFrames >= cleanWindowFrames()) {
         underrunEpisodes = 0;
       }
@@ -206,7 +217,8 @@ struct CVSRVCProcessor {
           resumeGuardActive = true;
           cleanFrames = 0;
           underrunEpisodes++;
-          if (underrunEpisodes >= kUnderrunEpisodeLimit) {
+          if (underrunEpisodes >= kUnderrunEpisodeLimit &&
+              canIncreaseOutputMargin()) {
             // Repeated dropouts mean the scheduling margin is too thin for
             // the current machine load. Rebuild the stream; the worker primes
             // a deeper output buffer after every mid-stream rebuild.

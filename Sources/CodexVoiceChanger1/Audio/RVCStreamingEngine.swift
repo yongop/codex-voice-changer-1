@@ -1,4 +1,5 @@
 import AudioBridge
+import Darwin
 import Foundation
 
 enum RVCActivityState: Equatable, Sendable {
@@ -55,9 +56,25 @@ final class RVCStreamingEngine {
   static let crossfadeSeconds = 0.05
   static let extraContextSeconds = 1.2
   static let pitchShiftSemitones = 5
-  static let schedulingReserveSeconds = 0.02
   static let initialPrimeBlocks = 2
-  static let maxPrimeBlocks = 4
+  static let maxPrimeBlocks = 5
+
+  static func adaptivePrimeBlocks(
+    observedInferenceMicroseconds: UInt32,
+    blockMicroseconds: UInt32
+  ) -> Int {
+    guard blockMicroseconds > 0 else {
+      return maxPrimeBlocks
+    }
+    let observedBlocks = Int(
+      (UInt64(observedInferenceMicroseconds)
+        + UInt64(blockMicroseconds) - 1) / UInt64(blockMicroseconds)
+    )
+    return min(
+      maxPrimeBlocks,
+      max(initialPrimeBlocks, observedBlocks + 1)
+    )
+  }
 
   private let transport: OpaquePointer
   private let sampleRate: Double
@@ -189,15 +206,42 @@ final class RVCStreamingEngine {
         processLock.unlock()
       }
 
-      let ready = try Self.readExactly(
-        count: 12,
+      let readyHeader = try Self.readExactly(
+        count: 8,
         from: outputPipe.fileHandleForReading
       )
-      guard ready.prefix(4) == Data("RDY1".utf8) else {
-        throw try Self.protocolError(from: ready, handle: outputPipe.fileHandleForReading)
+      let readyMagic = readyHeader.prefix(4)
+      if readyMagic == Data("ERR1".utf8) {
+        throw try Self.protocolError(
+          from: readyHeader,
+          handle: outputPipe.fileHandleForReading
+        )
       }
-      let workerRate = Self.uint32LE(ready, offset: 4)
-      let blockFrames = Int(Self.uint32LE(ready, offset: 8))
+      guard
+        readyMagic == Data("RDY1".utf8)
+          || readyMagic == Data("RDY2".utf8)
+      else {
+        throw try Self.protocolError(
+          from: readyHeader,
+          handle: outputPipe.fileHandleForReading
+        )
+      }
+      let workerRate = Self.uint32LE(readyHeader, offset: 4)
+      let blockSize = try Self.readExactly(
+        count: 4,
+        from: outputPipe.fileHandleForReading
+      )
+      let blockFrames = Int(Self.uint32LE(blockSize, offset: 0))
+      let stableWarmupMicroseconds: UInt32
+      if readyMagic == Data("RDY2".utf8) {
+        let warmup = try Self.readExactly(
+          count: 4,
+          from: outputPipe.fileHandleForReading
+        )
+        stableWarmupMicroseconds = Self.uint32LE(warmup, offset: 0)
+      } else {
+        stableWarmupMicroseconds = 0
+      }
       guard workerRate == UInt32(sampleRate.rounded()),
         blockFrames > 0
       else {
@@ -215,6 +259,7 @@ final class RVCStreamingEngine {
         input: inputPipe.fileHandleForWriting,
         output: outputPipe.fileHandleForReading,
         blockFrames: blockFrames,
+        stableWarmupMicroseconds: stableWarmupMicroseconds,
         token: token
       )
     } catch {
@@ -229,22 +274,64 @@ final class RVCStreamingEngine {
     input: FileHandle,
     output: FileHandle,
     blockFrames: Int,
+    stableWarmupMicroseconds: UInt32,
     token: RVCWorkerCancellationToken
   ) throws {
     var inputBlock = [Float](repeating: 0, count: blockFrames)
     var outputBlock = [Float](repeating: 0, count: blockFrames)
+    let frameCommand = Array("FRM1".utf8)
+    let resetCommand = Array("RST1".utf8)
+    var responseHeader = [UInt8](repeating: 0, count: 8)
+    guard fcntl(input.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+      throw RVCStreamingError.workerProtocol(
+        "파이프 설정 오류: \(String(cString: strerror(errno)))"
+      )
+    }
     // The output ring is primed with several converted blocks before playback
     // switches away from the dry fallback. That primed depth is the jitter
     // budget every later block's inference time may consume without causing
     // an audible dropout.
-    var primeTargetBlocks = Self.initialPrimeBlocks
+    let blockMicroseconds = UInt32(
+      min(
+        ceil(Double(blockFrames) / sampleRate * 1_000_000),
+        Double(UInt32.max)
+      )
+    )
+    var primeTargetBlocks = Self.adaptivePrimeBlocks(
+      observedInferenceMicroseconds: stableWarmupMicroseconds,
+      blockMicroseconds: blockMicroseconds
+    )
     var primed = false
     var latencyFrames: UInt32 = 0
     var epoch = DispatchTime.now()
+    var maximumObservedInferenceMicroseconds =
+      stableWarmupMicroseconds
+    let maximumTargetFrames = UInt32(
+      min(
+        UInt64(Self.maxPrimeBlocks) * UInt64(blockFrames),
+        UInt64(UInt32.max)
+      )
+    )
+    func publishBufferTarget() {
+      let targetFrames = UInt32(
+        min(
+          UInt64(primeTargetBlocks) * UInt64(blockFrames),
+          UInt64(UInt32.max)
+        )
+      )
+      CVSNeuralTransportSetOutputBufferTargets(
+        transport,
+        targetFrames,
+        maximumTargetFrames
+      )
+    }
+    publishBufferTarget()
 
     while !token.isCancelled && process.isRunning {
       if CVSNeuralTransportTakeStreamResetRequest(transport) {
-        try input.write(contentsOf: Data("RST1".utf8))
+        try resetCommand.withUnsafeBytes {
+          try Self.writeExactly($0, to: input)
+        }
         let response = try Self.readExactly(count: 4, from: output)
         guard response == Data("ACK1".utf8) else {
           throw try Self.protocolError(from: response, handle: output)
@@ -257,6 +344,9 @@ final class RVCStreamingEngine {
         primeTargetBlocks = min(primeTargetBlocks + 1, Self.maxPrimeBlocks)
         primed = false
         epoch = DispatchTime.now()
+        maximumObservedInferenceMicroseconds =
+          stableWarmupMicroseconds
+        publishBufferTarget()
       }
 
       guard CVSNeuralTransportAvailableInput(transport) >= blockFrames else {
@@ -280,21 +370,37 @@ final class RVCStreamingEngine {
         continue
       }
 
-      var request = Data("FRM1".utf8)
-      inputBlock.withUnsafeBytes { request.append(contentsOf: $0) }
-      try input.write(contentsOf: request)
-
-      let response = try Self.readExactly(count: 8, from: output)
-      guard response.prefix(4) == Data("OUT1".utf8) else {
-        throw try Self.protocolError(from: response, handle: output)
+      try frameCommand.withUnsafeBytes {
+        try Self.writeExactly($0, to: input)
       }
-      let inferenceMicroseconds = Self.uint32LE(response, offset: 4)
-      let pcm = try Self.readExactly(
-        count: blockFrames * MemoryLayout<Float>.size,
-        from: output
+      try inputBlock.withUnsafeBytes {
+        try Self.writeExactly($0, to: input)
+      }
+
+      try responseHeader.withUnsafeMutableBytes {
+        try Self.readExactly(into: $0, from: output)
+      }
+      guard responseHeader[0] == 0x4f,
+        responseHeader[1] == 0x55,
+        responseHeader[2] == 0x54,
+        responseHeader[3] == 0x31
+      else {
+        throw try Self.protocolError(
+          from: Data(responseHeader),
+          handle: output
+        )
+      }
+      let inferenceMicroseconds =
+        UInt32(responseHeader[4])
+        | UInt32(responseHeader[5]) << 8
+        | UInt32(responseHeader[6]) << 16
+        | UInt32(responseHeader[7]) << 24
+      maximumObservedInferenceMicroseconds = max(
+        maximumObservedInferenceMicroseconds,
+        inferenceMicroseconds
       )
-      _ = outputBlock.withUnsafeMutableBytes { destination in
-        pcm.copyBytes(to: destination)
+      try outputBlock.withUnsafeMutableBytes {
+        try Self.readExactly(into: $0, from: output)
       }
       guard outputBlock.allSatisfy(\.isFinite) else {
         throw RVCStreamingError.invalidOutput
@@ -319,8 +425,21 @@ final class RVCStreamingEngine {
           inferenceMicroseconds
         )
       } else if CVSNeuralTransportAvailableOutput(transport)
-        >= UInt32(primeTargetBlocks * blockFrames)
+        >= CVSNeuralTransportTargetOutputFrames(transport)
       {
+        // A slow first live block is a better predictor of the current
+        // machine/load than a fixed hardware-name table. Keep one full block
+        // beyond the observed inference span, up to the bounded ring budget.
+        let adaptiveTarget = Self.adaptivePrimeBlocks(
+          observedInferenceMicroseconds:
+            maximumObservedInferenceMicroseconds,
+          blockMicroseconds: blockMicroseconds
+        )
+        if adaptiveTarget > primeTargetBlocks {
+          primeTargetBlocks = adaptiveTarget
+          publishBufferTarget()
+          continue
+        }
         // The primed depth is complete. Every buffered frame stays exactly
         // (now - epoch) behind its capture time from here on, so that
         // measured interval is the constant presentation latency the dry
@@ -331,9 +450,7 @@ final class RVCStreamingEngine {
           ) / 1_000_000_000
         latencyFrames = UInt32(
           min(
-            ceil(
-              (elapsedSeconds + Self.schedulingReserveSeconds) * sampleRate
-            ),
+            ceil(elapsedSeconds * sampleRate),
             Double(UInt32.max)
           )
         )
@@ -363,15 +480,73 @@ final class RVCStreamingEngine {
     var result = Data()
     result.reserveCapacity(count)
     while result.count < count {
-      guard let block = try handle.read(
-        upToCount: count - result.count
-      ), !block.isEmpty
+      guard
+        let block = try handle.read(
+          upToCount: count - result.count
+        ), !block.isEmpty
       else {
         throw RVCStreamingError.workerProtocol("예기치 않은 EOF")
       }
       result.append(block)
     }
     return result
+  }
+
+  private static func readExactly(
+    into buffer: UnsafeMutableRawBufferPointer,
+    from handle: FileHandle
+  ) throws {
+    guard let baseAddress = buffer.baseAddress else {
+      return
+    }
+    var offset = 0
+    while offset < buffer.count {
+      let count = Darwin.read(
+        handle.fileDescriptor,
+        baseAddress.advanced(by: offset),
+        buffer.count - offset
+      )
+      if count > 0 {
+        offset += count
+        continue
+      }
+      if count < 0 && errno == EINTR {
+        continue
+      }
+      if count == 0 {
+        throw RVCStreamingError.workerProtocol("예기치 않은 EOF")
+      }
+      throw RVCStreamingError.workerProtocol(
+        "파이프 읽기 오류: \(String(cString: strerror(errno)))"
+      )
+    }
+  }
+
+  private static func writeExactly(
+    _ buffer: UnsafeRawBufferPointer,
+    to handle: FileHandle
+  ) throws {
+    guard let baseAddress = buffer.baseAddress else {
+      return
+    }
+    var offset = 0
+    while offset < buffer.count {
+      let count = Darwin.write(
+        handle.fileDescriptor,
+        baseAddress.advanced(by: offset),
+        buffer.count - offset
+      )
+      if count > 0 {
+        offset += count
+        continue
+      }
+      if count < 0 && errno == EINTR {
+        continue
+      }
+      throw RVCStreamingError.workerProtocol(
+        "파이프 쓰기 오류: \(String(cString: strerror(errno)))"
+      )
+    }
   }
 
   private static func uint32LE(
@@ -391,7 +566,15 @@ final class RVCStreamingEngine {
   ) throws -> RVCStreamingError {
     if header.prefix(4) == Data("ERR1".utf8), header.count >= 8 {
       let length = Int(uint32LE(header, offset: 4))
-      let message = try readExactly(count: length, from: handle)
+      var message = Data(header.dropFirst(8).prefix(length))
+      if message.count < length {
+        message.append(
+          try readExactly(
+            count: length - message.count,
+            from: handle
+          )
+        )
+      }
       return .workerProtocol(
         String(data: message, encoding: .utf8) ?? "작업자 오류"
       )
