@@ -190,9 +190,12 @@ final class AudioBridgeTests: XCTestCase {
     XCTAssertGreaterThan(fallbackLeft.min() ?? 0, 0.2)
     XCTAssertGreaterThan(fallbackRight.min() ?? 0, 0.2)
 
+    // Recovery drops the frames the dry fallback already presented (5
+    // quanta) and additionally waits for the resume guard (50 ms) before
+    // switching back, so the recovery push must cover drop + guard + render.
     let recovered = [Float](
       repeating: -0.6,
-      count: quantum * 4
+      count: quantum * 20
     )
     XCTAssertEqual(
       recovered.withUnsafeBufferPointer {
@@ -213,6 +216,70 @@ final class AudioBridgeTests: XCTestCase {
     }
     XCTAssertLessThan(fallbackLeft.last ?? 0, -0.4)
     XCTAssertFalse(CVSNeuralTransportTakeStreamResetRequest(transport))
+  }
+
+  func testRepeatedRVCDropoutsEscalateToStreamRebuild() throws {
+    let sampleRate = 48_000.0
+    let quantum = 512
+    let bridge = try XCTUnwrap(CVSAudioBridgeCreate(16_384))
+    defer { CVSAudioBridgeDestroy(bridge) }
+    let transport = try XCTUnwrap(CVSNeuralTransportCreate(65_536))
+    defer { CVSNeuralTransportDestroy(transport) }
+    let processor = try XCTUnwrap(
+      CVSRVCProcessorCreate(
+        bridge,
+        transport,
+        sampleRate,
+        UInt32(quantum)
+      )
+    )
+    defer { CVSRVCProcessorDestroy(processor) }
+
+    CVSNeuralTransportSetMetrics(transport, 512, 125_000)
+    CVSNeuralTransportSetStatus(transport, CVSNeuralStatusReady)
+
+    let dry = [Float](repeating: 0.25, count: quantum * 2)
+    let converted = [Float](repeating: 0.9, count: quantum * 12)
+    var left = [Float](repeating: 0, count: quantum)
+    var right = [Float](repeating: 0, count: quantum)
+
+    // Isolated dropouts must recover without a rebuild; only the third
+    // dropout without a long clean stretch escalates to a stream reset.
+    for episode in 0..<3 {
+      XCTAssertFalse(
+        CVSNeuralTransportTakeStreamResetRequest(transport),
+        "episode \(episode) escalated too early"
+      )
+      _ = converted.withUnsafeBufferPointer {
+        CVSNeuralTransportPushOutput(
+          transport,
+          $0.baseAddress!,
+          UInt32($0.count)
+        )
+      }
+      var sawConverted = false
+      // 14 renders drain the 12 pushed quanta (minus the frames dropped for
+      // timeline alignment) and always end in a starved stretch, so every
+      // loop iteration produces exactly one dropout episode.
+      for _ in 0..<14 {
+        _ = dry.withUnsafeBufferPointer {
+          CVSAudioBridgeWriteTestStereo(
+            bridge,
+            $0.baseAddress!,
+            UInt32(quantum)
+          )
+        }
+        render(processor: processor, left: &left, right: &right)
+        if (left.last ?? 0) > 0.4 {
+          sawConverted = true
+        }
+      }
+      XCTAssertTrue(
+        sawConverted,
+        "episode \(episode) never returned to converted audio"
+      )
+    }
+    XCTAssertTrue(CVSNeuralTransportTakeStreamResetRequest(transport))
   }
 
   func testSustainedRVCUnderrunRequestsFreshStreamWithoutSilence() throws {
@@ -248,12 +315,27 @@ final class AudioBridgeTests: XCTestCase {
     CVSNeuralTransportSetMetrics(transport, 512, 125_000)
     CVSNeuralTransportSetStatus(transport, CVSNeuralStatusReady)
 
+    // A worker that was never able to produce output is only rebuilt by the
+    // 1.5 s watchdog; short stalls must keep the dry fallback instead.
+    let topUp = [Float](repeating: 0.2, count: quantum * 2)
     var left = [Float](repeating: 0, count: quantum)
     var right = [Float](repeating: 0, count: quantum)
-    for _ in 0..<13 {
+    let watchdogRenders = Int(1.5 * sampleRate / Double(quantum)) + 2
+    for renderIndex in 0..<watchdogRenders {
+      _ = topUp.withUnsafeBufferPointer {
+        CVSAudioBridgeWriteTestStereo(
+          bridge,
+          $0.baseAddress!,
+          UInt32(quantum)
+        )
+      }
       render(processor: processor, left: &left, right: &right)
       if left.contains(where: { abs($0) > 0.001 }) {
         XCTAssertGreaterThan(left.max() ?? 0, 0.05)
+      }
+      if renderIndex == 12 {
+        // The old hair-trigger threshold (0.12 s) must not fire anymore.
+        XCTAssertFalse(CVSNeuralTransportTakeStreamResetRequest(transport))
       }
     }
     XCTAssertTrue(CVSNeuralTransportTakeStreamResetRequest(transport))
@@ -267,7 +349,9 @@ final class AudioBridgeTests: XCTestCase {
     CVSNeuralTransportSetStatus(transport, CVSNeuralStatusReady)
     render(processor: processor, left: &left, right: &right)
 
-    let recovered = [Float](repeating: -0.5, count: quantum * 4)
+    // One dry quantum was presented after the discard, so the recovery push
+    // covers that dropped quantum plus the four rendered quanta.
+    let recovered = [Float](repeating: -0.5, count: quantum * 5)
     _ = recovered.withUnsafeBufferPointer {
       CVSNeuralTransportPushOutput(
         transport,

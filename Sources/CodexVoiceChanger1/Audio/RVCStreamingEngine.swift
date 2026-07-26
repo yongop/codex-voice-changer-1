@@ -53,9 +53,11 @@ private struct RVCResourcePaths {
 final class RVCStreamingEngine {
   static let blockSeconds = 0.22
   static let crossfadeSeconds = 0.05
-  static let extraContextSeconds = 2.5
+  static let extraContextSeconds = 1.2
   static let pitchShiftSemitones = 5
-  static let schedulingReserveSeconds = 0.06
+  static let schedulingReserveSeconds = 0.02
+  static let initialPrimeBlocks = 2
+  static let maxPrimeBlocks = 4
 
   private let transport: OpaquePointer
   private let sampleRate: Double
@@ -87,10 +89,13 @@ final class RVCStreamingEngine {
     }
     let nextToken = RVCWorkerCancellationToken()
     token = nextToken
-    // Replaced by block + measured inference + reserve after warm-up.
+    // Rough dry-alignment estimate until the primed latency is measured:
+    // prime depth plus a typical warm inference and scheduling overhead.
+    let estimatedLatencySeconds =
+      Double(Self.initialPrimeBlocks) * Self.blockSeconds + 0.16
     CVSNeuralTransportSetMetrics(
       transport,
-      UInt32(ceil(sampleRate * 0.42)),
+      UInt32(ceil(sampleRate * estimatedLatencySeconds)),
       0
     )
     publishStatus(CVSNeuralStatusLoading, activity: .preparing)
@@ -228,11 +233,14 @@ final class RVCStreamingEngine {
   ) throws {
     var inputBlock = [Float](repeating: 0, count: blockFrames)
     var outputBlock = [Float](repeating: 0, count: blockFrames)
-    let blockNanoseconds = UInt64(
-      Double(blockFrames) / sampleRate * 1_000_000_000
-    )
-    var presentationNanoseconds = UInt64(420_000_000)
-    var producedOutput = false
+    // The output ring is primed with several converted blocks before playback
+    // switches away from the dry fallback. That primed depth is the jitter
+    // budget every later block's inference time may consume without causing
+    // an audible dropout.
+    var primeTargetBlocks = Self.initialPrimeBlocks
+    var primed = false
+    var latencyFrames: UInt32 = 0
+    var epoch = DispatchTime.now()
 
     while !token.isCancelled && process.isRunning {
       if CVSNeuralTransportTakeStreamResetRequest(transport) {
@@ -244,8 +252,11 @@ final class RVCStreamingEngine {
         CVSNeuralTransportDiscardInput(transport)
         CVSNeuralTransportRequestOutputDiscard(transport)
         publishStatus(CVSNeuralStatusWarmingUp, activity: .preparing)
-        producedOutput = false
-        presentationNanoseconds = UInt64(420_000_000)
+        // A mid-stream rebuild means the previous margin was too thin for
+        // this machine's load, so prime one block deeper each time.
+        primeTargetBlocks = min(primeTargetBlocks + 1, Self.maxPrimeBlocks)
+        primed = false
+        epoch = DispatchTime.now()
       }
 
       guard CVSNeuralTransportAvailableInput(transport) >= blockFrames else {
@@ -271,7 +282,6 @@ final class RVCStreamingEngine {
 
       var request = Data("FRM1".utf8)
       inputBlock.withUnsafeBytes { request.append(contentsOf: $0) }
-      let started = DispatchTime.now().uptimeNanoseconds
       try input.write(contentsOf: request)
 
       let response = try Self.readExactly(count: 8, from: output)
@@ -302,35 +312,37 @@ final class RVCStreamingEngine {
         continue
       }
 
-      if !producedOutput {
-        let inferenceNanoseconds =
-          DispatchTime.now().uptimeNanoseconds - started
-        presentationNanoseconds = max(
-          UInt64(320_000_000),
-          blockNanoseconds + inferenceNanoseconds
-            + UInt64(
-              Self.schedulingReserveSeconds * 1_000_000_000
-            )
+      if primed {
+        CVSNeuralTransportSetMetrics(
+          transport,
+          latencyFrames,
+          inferenceMicroseconds
         )
-        producedOutput = true
-        Thread.sleep(forTimeInterval: Self.schedulingReserveSeconds)
-      }
-      let latencyFrames = UInt32(
-        min(
-          ceil(
-            Double(presentationNanoseconds) / 1_000_000_000 * sampleRate
-          ),
-          Double(UInt32.max)
-        )
-      )
-      CVSNeuralTransportSetMetrics(
-        transport,
-        latencyFrames,
-        inferenceMicroseconds
-      )
-      if CVSNeuralTransportGetStatus(transport)
-        == CVSNeuralStatusWarmingUp
+      } else if CVSNeuralTransportAvailableOutput(transport)
+        >= UInt32(primeTargetBlocks * blockFrames)
       {
+        // The primed depth is complete. Every buffered frame stays exactly
+        // (now - epoch) behind its capture time from here on, so that
+        // measured interval is the constant presentation latency the dry
+        // fallback must match for aligned crossfades.
+        let elapsedSeconds =
+          Double(
+            DispatchTime.now().uptimeNanoseconds - epoch.uptimeNanoseconds
+          ) / 1_000_000_000
+        latencyFrames = UInt32(
+          min(
+            ceil(
+              (elapsedSeconds + Self.schedulingReserveSeconds) * sampleRate
+            ),
+            Double(UInt32.max)
+          )
+        )
+        primed = true
+        CVSNeuralTransportSetMetrics(
+          transport,
+          latencyFrames,
+          inferenceMicroseconds
+        )
         publishStatus(CVSNeuralStatusReady, activity: .active)
       }
     }
