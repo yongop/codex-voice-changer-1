@@ -8,6 +8,7 @@ final class AppModel: NSObject, ObservableObject {
   @Published var selectedBundleID = ""
   @Published private(set) var isRunning = false
   @Published private(set) var rvcActivity: RVCActivityState = .off
+  @Published private(set) var hasAcceptedTerms = false
   @Published var errorText: String?
 
   private var pipeline: AudioPipeline?
@@ -15,6 +16,7 @@ final class AppModel: NSObject, ObservableObject {
   private var workspaceObservers: [NSObjectProtocol] = []
 
   override init() {
+    hasAcceptedTerms = TsukuyomiTermsConsent.isAccepted()
     super.init()
     selectedBundleID =
       UserDefaults.standard.string(forKey: "targetBundleID") ?? ""
@@ -76,7 +78,16 @@ final class AppModel: NSObject, ObservableObject {
     isRunning ? stop() : start()
   }
 
+  func acceptTerms() {
+    TsukuyomiTermsConsent.recordAcceptance()
+    hasAcceptedTerms = true
+  }
+
   func start() {
+    guard hasAcceptedTerms else {
+      errorText = "공식 RVC 모델 이용규약에 먼저 동의해 주세요."
+      return
+    }
     guard let target = selectedApplication else {
       errorText = "먼저 캡처할 앱을 선택해 주세요."
       return

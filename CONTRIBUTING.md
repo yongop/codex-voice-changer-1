@@ -6,13 +6,15 @@
 ## 개발 환경
 
 1. `README.md`의 요구 사항을 확인합니다.
-2. RVC 통합 작업이 필요할 때만 공식 규약을 읽고
-   `./Scripts/setup-runtime.sh --accept-tsukuyomi-terms`를 실행합니다.
+2. RVC 통합 작업이 필요할 때만 `./Scripts/setup-runtime.sh`를 실행합니다.
+   모델 이용규약 동의는 설치 스크립트가 아니라 앱 최초 실행 화면에서
+   명시적으로 진행합니다.
 3. 변경 전후에 `swift test`를 실행합니다.
 4. 제출 전에 `./Scripts/audit-public-tree.sh`로 공개 대상 파일을 검사합니다.
 
 기본 테스트는 모델 없이 실행할 수 있어야 합니다. 모델이 필요한 테스트는
 `CVS_RUN_RVC_INTEGRATION_TEST=1`처럼 명시적인 환경 변수로만 활성화해 주세요.
+`swift test`는 `XCTest`를 제공하는 전체 Xcode가 필요합니다.
 
 ## Pull Request
 

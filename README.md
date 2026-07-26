@@ -9,7 +9,9 @@ macOS 앱입니다. 마이크나 가상 오디오 드라이버는 사용하지 �
 > 소스 코드는 MIT 라이선스이지만, 츠쿠요미짱 공식 RVC 모델은 별도의
 > [공식 이용규약](https://tyc.rei-yumesaki.net/work/software/rvc/terms/)을
 > 따릅니다. 모델 파일은 이 저장소에 포함되지 않으며, 처음 설정할 때 공식
-> 배포처에서 직접 내려받습니다.
+> 배포처에서 직접 내려받습니다. 설치 스크립트는 이용규약 동의를 대신
+> 기록하지 않으며, 앱을 처음 실행하면 RVC를 사용하기 전에 공식 페이지와
+> 이용규약을 확인하고 `공식 이용규약에 동의하고 시작` 버튼을 눌러야 합니다.
 
 ## 주요 기능
 
@@ -26,7 +28,7 @@ macOS 앱입니다. 마이크나 가상 오디오 드라이버는 사용하지 �
 - macOS 14.2 이상
 - Xcode 16.3 이상 또는 Swift 6.1 이상 도구 모음
 - [uv](https://docs.astral.sh/uv/)와 Git
-- 최초 설정 시 약 2 GB의 여유 공간과 인터넷 연결
+- 최초 설정·빌드·설치 시 약 3 GB의 여유 공간과 인터넷 연결
 - 최초 실행 시 macOS의 **시스템 오디오 녹음** 권한
 
 Intel Mac은 현재 지원하지 않습니다.
@@ -40,10 +42,9 @@ Python 3.11.15입니다. 패키지는 호환 범위를 넓히기 위해 Swift 6.
 저장소를 받은 뒤 프로젝트 루트에서 실행합니다.
 
 ```sh
-# 먼저 링크된 공식 모델 페이지와 이용규약을 읽어 주세요.
-./Scripts/setup-runtime.sh --accept-tsukuyomi-terms
+./Scripts/setup-runtime.sh
 
-./Scripts/build-app.sh
+./Scripts/install-app.sh
 ./Scripts/run-app.sh
 ```
 
@@ -53,16 +54,33 @@ Python 3.11.15입니다. 패키지는 호환 범위를 넓히기 위해 Swift 6.
 - 고정된 RVC 소스 커밋과 HuBERT/RMVPE 파일: SHA-256 검증
 - Python 3.11 가상환경과 고정 버전 런타임 의존성
 
-생성된 앱은 `dist/Codex Voice Changer 1.app`에 있습니다. 현재 빌드는 프로젝트의
-`.rvc_env`를 사용하므로, 앱만 다른 Mac으로 복사하는 독립 실행형 배포는
-아직 지원하지 않습니다.
+설정 단계에서는 이용규약 동의를 받거나 저장하지 않습니다. 동의는 앱의
+최초 실행 화면에서 공식 링크와 주요 조건을 확인한 뒤 명시적으로 진행합니다.
+
+서명된 빌드 산출물은 `dist/Codex Voice Changer 1.app.zip`에 보관되고,
+설치된 앱은 `/Applications/Codex Voice Changer 1.app`에 있습니다.
+`Documents`가 iCloud File Provider로 관리되더라도 Finder 확장 속성이
+코드서명을 깨뜨리지 않도록 앱은 임시 로컬 경로에서 서명한 뒤 ZIP으로
+보존하고 `/Applications`에서 다시 검증합니다.
+
+현재 빌드는 프로젝트의 `.rvc_env`를 사용하므로, 프로젝트 폴더를 이동하거나
+삭제하거나 앱만 다른 Mac으로 복사하는 독립 실행형 배포는 아직 지원하지
+않습니다. `/Applications`에 쓸 수 없는 환경에서는 설치와 실행 모두에
+`CVS_APP_INSTALL_DIR`을 지정할 수 있습니다.
+
+```sh
+CVS_APP_INSTALL_DIR="$HOME/Applications" ./Scripts/install-app.sh
+CVS_APP_INSTALL_DIR="$HOME/Applications" ./Scripts/run-app.sh
+```
 
 ## 사용법
 
-1. 변환할 소리를 내는 앱을 먼저 실행합니다.
-2. Codex Voice Changer 1의 `캡처할 앱`에서 대상을 고릅니다.
-3. `RVC ON`을 누르고 시스템 오디오 녹음 권한을 허용합니다.
-4. 대상 앱에서 음성을 재생합니다.
+1. 처음 실행하면 공식 배포 페이지와 이용규약을 읽고
+   `공식 이용규약에 동의하고 시작`을 누릅니다.
+2. 변환할 소리를 내는 앱을 실행합니다.
+3. Codex Voice Changer 1의 `캡처할 앱`에서 대상을 고릅니다.
+4. `RVC ON`을 누르고 시스템 오디오 녹음 권한을 허용합니다.
+5. 대상 앱에서 음성을 재생합니다.
 
 RVC가 켜진 동안 대상 앱의 직접 출력은 음소거되고 이 앱이 변환 음성을
 재생합니다. 모델 로딩, 짧은 처리 지연 또는 변환 실패 시에는 원음이
@@ -79,6 +97,10 @@ RVC가 켜진 동안 대상 앱의 직접 출력은 음소거되고 이 앱이 �
 ```sh
 swift test
 ```
+
+`swift test`에는 `XCTest`가 포함된 전체 Xcode가 필요합니다. Command Line
+Tools만 설치된 환경에서는 앱을 `swift build`로 빌드할 수 있지만 테스트
+타깃은 컴파일되지 않습니다.
 
 설정을 마친 Apple Silicon Mac에서 실제 RVC 작업자까지 확인하는 통합 테스트:
 

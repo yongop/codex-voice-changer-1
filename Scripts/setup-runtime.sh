@@ -21,16 +21,17 @@ HUBERT_PREPROCESSOR_SHA256="7c1976a680fb7acc757cd36fb08eef878fa36c70b4c9d2d595df
 HUBERT_MODEL_SHA256="cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5"
 RMVPE_SHA256="6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193"
 
-if [[ "${1:-}" != "--accept-tsukuyomi-terms" || "$#" -ne 1 ]]; then
-    print -u2 "This setup downloads the official つくよみちゃん RVC model."
-    print -u2 "Read the model page and current terms before continuing:"
-    print -u2 "  ${OFFICIAL_MODEL_PAGE}"
-    print -u2 "  ${OFFICIAL_TERMS_URL}"
-    print -u2
-    print -u2 "If you accept them, run:"
-    print -u2 "  ./Scripts/setup-runtime.sh --accept-tsukuyomi-terms"
+if [[ "$#" -ne 0 ]]; then
+    print -u2 "usage: ./Scripts/setup-runtime.sh"
     exit 64
 fi
+
+print "This setup downloads the official つくよみちゃん RVC model."
+print "The app requires explicit acceptance of the current model terms"
+print "on first launch before RVC can be used:"
+print "  ${OFFICIAL_MODEL_PAGE}"
+print "  ${OFFICIAL_TERMS_URL}"
+print
 
 for command_name in curl git shasum ditto uv; do
     if ! command -v "${command_name}" >/dev/null 2>&1; then
@@ -43,7 +44,9 @@ verify_sha256() {
     local artifact_path="$1"
     local expected="$2"
     local actual
-    actual="$(shasum -a 256 "${artifact_path}" | awk '{print $1}')"
+    # Read from stdin so shasum never escapes a non-UTF-8 archive filename
+    # and prefixes the digest with a backslash.
+    actual="$(shasum -a 256 < "${artifact_path}" | awk '{print $1}')"
     if [[ "${actual}" != "${expected}" ]]; then
         print -u2 "SHA-256 mismatch: ${artifact_path}"
         print -u2 "expected ${expected}"
@@ -105,13 +108,18 @@ else
     TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-voice-changer-1.XXXXXX")"
     trap 'rm -rf "${TEMP_DIR}"' EXIT
     ditto -x -k "${ARCHIVE_PATH}" "${TEMP_DIR}"
-    EXTRACTED_MODEL="$(
-        find "${TEMP_DIR}" -type f -name '*.pth' -print \
-          | LC_ALL=C sort \
-          | sed -n '1p'
-    )"
+    EXTRACTED_MODEL=""
+    while IFS= read -r -d '' candidate; do
+        candidate_sha256="$(
+            shasum -a 256 < "${candidate}" | awk '{print $1}'
+        )"
+        if [[ "${candidate_sha256}" == "${MODEL_SHA256}" ]]; then
+            EXTRACTED_MODEL="${candidate}"
+            break
+        fi
+    done < <(find "${TEMP_DIR}" -type f -name '*.pth' -print0)
     if [[ -z "${EXTRACTED_MODEL}" ]]; then
-        print -u2 "Could not locate the 通常1 checkpoint in the official archive."
+        print -u2 "Could not locate the verified 通常1 checkpoint in the official archive."
         exit 66
     fi
     verify_sha256 "${EXTRACTED_MODEL}" "${MODEL_SHA256}"
@@ -161,6 +169,6 @@ uv pip install \
 
 print
 print "RVC runtime is ready."
-print "Build and run with:"
-print "  ./Scripts/build-app.sh"
+print "Install and run with:"
+print "  ./Scripts/install-app.sh"
 print "  ./Scripts/run-app.sh"
