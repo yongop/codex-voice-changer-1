@@ -1,5 +1,5 @@
 # Runtime dependencies verified on Apple Silicon with Python 3.11.
-torch==2.7.1
+torch==2.13.0
 torchaudio==2.7.1
 av==15.1.0
 einops==0.8.2
