@@ -76,7 +76,8 @@ struct SetupGuideView: View {
         systemImage: "bubble.left.and.bubble.right",
         detail: """
           ChatGPT에서 음성 대화를 먼저 시작해 마이크를 활성화합니다. \
-          이 앱의 ‘캡처할 앱’에서도 같은 앱을 선택해야 그 앱의 출력이 캡처됩니다.
+          이 앱의 ‘캡처할 앱’에서도 같은 앱을 선택해야 그 앱의 출력이 캡처됩니다. \
+          ChatGPT 앱 내 설정의 음성 추천 값은 ‘Sol’입니다.
           """
       ),
       SetupStep(
@@ -160,7 +161,6 @@ struct SetupGuideView: View {
         hoveredStep = nil
       }
     }
-    .help(step.detail)
     .accessibilityLabel("\(step.id)단계, \(step.title)")
     .accessibilityHint(step.detail)
   }

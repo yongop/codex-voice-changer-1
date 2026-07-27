@@ -8,7 +8,8 @@ struct CodexVoiceChanger1App: App {
     WindowGroup {
       ContentView(model: model)
     }
-    .windowResizability(.contentSize)
+    .defaultSize(width: 500, height: 720)
+    .windowResizability(.contentMinSize)
     .commands {
       CommandGroup(after: .appInfo) {
         Divider()

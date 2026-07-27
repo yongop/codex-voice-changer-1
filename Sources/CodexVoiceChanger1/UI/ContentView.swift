@@ -13,7 +13,7 @@ struct ContentView: View {
     }
     .frame(width: 500)
     .fixedSize(horizontal: false, vertical: true)
-    .frame(minHeight: 555)
+    .frame(minHeight: 690)
     .alert(
       "RVC를 시작하지 못했습니다",
       isPresented: Binding(
@@ -35,13 +35,8 @@ struct ContentView: View {
         Image(systemName: "waveform.badge.mic")
           .font(.system(size: 27, weight: .semibold))
           .foregroundStyle(.tint)
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Codex Voice Changer 1")
-            .font(.title2.bold())
-          Text("通常1 · RMVPE · +5반음")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
+        Text("Codex Voice Changer 1")
+          .font(.title2.bold())
       }
 
       GroupBox {
@@ -101,9 +96,8 @@ struct ContentView: View {
 
       SetupGuideView(model: model)
 
-      Spacer(minLength: 0)
-
       voiceCredit
+        .padding(.top, -10)
     }
     .padding(24)
   }
@@ -211,7 +205,7 @@ struct ContentView: View {
       }
       Text("모델 사용 시 공식 RVC 모델 이용규약을 준수해야 하며, 변환 음성 공개 시 원음 출처와 모델을 함께 표기해야 합니다.")
     }
-    .font(.caption2)
+    .font(.system(size: 10.5))
     .foregroundStyle(.secondary)
     .fixedSize(horizontal: false, vertical: true)
     .accessibilityElement(children: .combine)
