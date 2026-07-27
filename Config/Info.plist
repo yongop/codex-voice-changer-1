@@ -14,6 +14,8 @@
     <string>6.0</string>
     <key>CFBundleName</key>
     <string>Codex Voice Changer 1</string>
+    <key>CFBundleIconFile</key>
+    <string>CodexVoiceChanger</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

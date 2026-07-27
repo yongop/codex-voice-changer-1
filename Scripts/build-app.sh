@@ -26,6 +26,9 @@ mkdir -p "${APP_DIR}/Contents/Resources/Models"
 
 install -m 755 "${EXECUTABLE}" "${APP_DIR}/Contents/MacOS/CodexVoiceChanger1"
 install -m 644 "${PROJECT_DIR}/Config/Info.plist" "${APP_DIR}/Contents/Info.plist"
+install -m 644 \
+    "${PROJECT_DIR}/Resources/Assets/CodexVoiceChanger.icns" \
+    "${APP_DIR}/Contents/Resources/CodexVoiceChanger.icns"
 ditto \
     "${PROJECT_DIR}/ThirdPartyLicenses" \
     "${APP_DIR}/Contents/Resources/ThirdPartyLicenses"
