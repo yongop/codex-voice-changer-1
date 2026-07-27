@@ -137,11 +137,22 @@ final class AppModel: NSObject, ObservableObject {
   }
 
   func openAudioPrivacySettings() {
-    let candidates = [
+    openPrivacySettings([
       "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture",
       "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
       "x-apple.systempreferences:com.apple.preference.security",
-    ]
+    ])
+  }
+
+  func openFilesPrivacySettings() {
+    openPrivacySettings([
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders",
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+      "x-apple.systempreferences:com.apple.preference.security",
+    ])
+  }
+
+  private func openPrivacySettings(_ candidates: [String]) {
     for value in candidates {
       if let url = URL(string: value), NSWorkspace.shared.open(url) {
         return

@@ -11,7 +11,9 @@ struct ContentView: View {
         termsConsent
       }
     }
-    .frame(width: 500, height: 555)
+    .frame(width: 500)
+    .fixedSize(horizontal: false, vertical: true)
+    .frame(minHeight: 555)
     .alert(
       "RVC를 시작하지 못했습니다",
       isPresented: Binding(
@@ -97,27 +99,7 @@ struct ContentView: View {
         activityIndicator
       }
 
-      GroupBox {
-        VStack(alignment: .leading, spacing: 9) {
-          Text(
-            "처음 켤 때 macOS가 ‘시스템 오디오 녹음’ 권한을 요청합니다. 이 앱은 선택한 앱의 출력만 캡처하며 마이크는 사용하지 않습니다."
-          )
-          Text(
-            "권한을 허용한 뒤 소리가 나오지 않으면 앱을 한 번 종료하고 다시 실행해 주세요."
-          )
-          .foregroundStyle(.secondary)
-
-          Button("시스템 오디오 권한 설정 열기") {
-            model.openAudioPrivacySettings()
-          }
-        }
-        .font(.callout)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(4)
-      } label: {
-        Label("권한 요청 안내", systemImage: "lock.shield")
-          .font(.headline)
-      }
+      SetupGuideView(model: model)
 
       Spacer(minLength: 0)
 
