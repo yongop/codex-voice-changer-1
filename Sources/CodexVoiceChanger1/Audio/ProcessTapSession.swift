@@ -40,7 +40,7 @@ final class ProcessTapSession {
     var createdTapID = AudioObjectID(kAudioObjectUnknown)
     try requireNoErr(
       AudioHardwareCreateProcessTap(description, &createdTapID),
-      "선택한 앱의 오디오 탭 생성"
+      .createTap
     )
     guard createdTapID != kAudioObjectUnknown else {
       throw VoiceChangerError.invalidTap
@@ -94,7 +94,7 @@ final class ProcessTapSession {
         &byteCount,
         &value
       ),
-      "오디오 탭 형식 읽기"
+      .readTapFormat
     )
     guard value.mSampleRate > 0 else {
       throw VoiceChangerError.invalidAudioFormat
@@ -120,7 +120,7 @@ final class ProcessTapSession {
         pointer
       )
     }
-    try requireNoErr(status, "오디오 탭 식별자 읽기")
+    try requireNoErr(status, .readTapUID)
     return value as String
   }
 
@@ -144,7 +144,7 @@ final class ProcessTapSession {
         description as CFDictionary,
         &deviceID
       ),
-      "오디오 탭용 가상 장치 생성"
+      .createAggregateDevice
     )
     guard deviceID != kAudioObjectUnknown else {
       throw VoiceChangerError.invalidAggregateDevice

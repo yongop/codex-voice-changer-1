@@ -1,0 +1,2 @@
+/* Shown in the macOS permission prompt for system audio recording. */
+"NSAudioCaptureUsageDescription" = "System audio access is required to convert the selected app's output in real time with the Tsukuyomi-chan RVC model. The microphone is never used.";

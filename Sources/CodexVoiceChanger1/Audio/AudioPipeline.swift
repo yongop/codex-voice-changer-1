@@ -14,19 +14,19 @@ enum VoiceChangerError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .unsupportedSystem:
-      return "이 앱은 macOS 14.2 이상이 필요합니다."
+      return L.s.errorUnsupportedSystem
     case .noAudioProcess:
-      return "선택한 앱의 오디오 프로세스를 찾지 못했습니다. 대상 앱에서 소리를 한 번 재생한 뒤 다시 시도해 주세요."
+      return L.s.errorNoAudioProcess
     case .invalidTap:
-      return "선택한 앱의 시스템 오디오 캡처를 만들지 못했습니다."
+      return L.s.errorInvalidTap
     case .invalidAggregateDevice:
-      return "캡처용 비공개 오디오 장치를 만들지 못했습니다."
+      return L.s.errorInvalidAggregateDevice
     case .invalidAudioFormat:
-      return "캡처된 오디오 형식을 재생할 수 없습니다."
+      return L.s.errorInvalidAudioFormat
     case .bufferAllocation:
-      return "실시간 오디오 버퍼를 할당하지 못했습니다."
+      return L.s.errorBufferAllocation
     case .processorAllocation:
-      return "RVC 출력 처리기를 만들지 못했습니다."
+      return L.s.errorProcessorAllocation
     }
   }
 }
@@ -78,7 +78,7 @@ final class AudioPipeline {
       guard captureStatus == noErr else {
         playback.stop()
         throw CoreAudioFailure(
-          operation: "실시간 앱 오디오 캡처 시작",
+          operation: .startCapture,
           status: captureStatus
         )
       }

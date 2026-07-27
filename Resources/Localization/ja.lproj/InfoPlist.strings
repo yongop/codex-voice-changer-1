@@ -1,0 +1,2 @@
+/* Shown in the macOS permission prompt for system audio recording. */
+"NSAudioCaptureUsageDescription" = "選択したアプリの出力音声をつくよみちゃんRVCでリアルタイム変換するために、システム音声へのアクセスが必要です。マイクは使用しません。";

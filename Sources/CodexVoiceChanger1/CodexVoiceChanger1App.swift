@@ -13,7 +13,7 @@ struct CodexVoiceChanger1App: App {
     .commands {
       CommandGroup(after: .appInfo) {
         Divider()
-        Button("실행 중인 앱 새로고침") {
+        Button(model.strings.refreshRunningApps) {
           model.refreshApplications()
         }
         .keyboardShortcut("r", modifiers: [.command])

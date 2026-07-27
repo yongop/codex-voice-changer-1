@@ -32,6 +32,11 @@ install -m 644 \
 ditto \
     "${PROJECT_DIR}/ThirdPartyLicenses" \
     "${APP_DIR}/Contents/Resources/ThirdPartyLicenses"
+for localization_dir in "${PROJECT_DIR}/Resources/Localization"/*.lproj; do
+    ditto \
+        "${localization_dir}" \
+        "${APP_DIR}/Contents/Resources/${localization_dir:t}"
+done
 install -m 644 \
     "${PROJECT_DIR}/Resources/Models/TSUKUYOMI_RVC_MODEL_CARD.md" \
     "${APP_DIR}/Contents/Resources/Models/TSUKUYOMI_RVC_MODEL_CARD.md"

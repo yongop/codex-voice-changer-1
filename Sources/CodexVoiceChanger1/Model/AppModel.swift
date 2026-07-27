@@ -10,6 +10,13 @@ final class AppModel: NSObject, ObservableObject {
   @Published private(set) var rvcActivity: RVCActivityState = .off
   @Published private(set) var hasAcceptedTerms = false
   @Published var errorText: String?
+  @Published var language: AppLanguage = .system {
+    didSet {
+      guard language != oldValue else { return }
+      AppLanguage.save(language)
+      L.update(to: language)
+    }
+  }
 
   private var pipeline: AudioPipeline?
   private var pipelineGeneration = UUID()
@@ -18,6 +25,8 @@ final class AppModel: NSObject, ObservableObject {
   override init() {
     hasAcceptedTerms = TsukuyomiTermsConsent.isAccepted()
     super.init()
+    language = AppLanguage.stored()
+    L.update(to: language)
     selectedBundleID =
       UserDefaults.standard.string(forKey: "targetBundleID") ?? ""
     refreshApplications()
@@ -28,6 +37,11 @@ final class AppModel: NSObject, ObservableObject {
     for observer in workspaceObservers {
       NotificationCenter.default.removeObserver(observer)
     }
+  }
+
+  /// Strings for the language the user is currently reading.
+  var strings: any AppStringsProviding {
+    language.strings
   }
 
   var selectedApplication: TargetApplication? {
@@ -85,11 +99,11 @@ final class AppModel: NSObject, ObservableObject {
 
   func start() {
     guard hasAcceptedTerms else {
-      errorText = "공식 RVC 모델 이용규약에 먼저 동의해 주세요."
+      errorText = strings.errorTermsRequired
       return
     }
     guard let target = selectedApplication else {
-      errorText = "먼저 캡처할 앱을 선택해 주세요."
+      errorText = strings.errorSelectTargetApp
       return
     }
 

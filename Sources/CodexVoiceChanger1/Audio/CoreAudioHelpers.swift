@@ -1,18 +1,63 @@
 import CoreAudio
 import Foundation
 
+/// The step a Core Audio call was performing, kept as a case rather than a
+/// message so the failure reads in whichever language is active when it is
+/// shown.
+enum CoreAudioOperation {
+  case startCapture
+  case createTap
+  case readTapFormat
+  case readTapUID
+  case createAggregateDevice
+  case findAudioProcess
+  case queryProcessListSize
+  case readProcessList
+  case readProcessBundleID
+
+  var localizedName: String {
+    let strings = L.s
+    switch self {
+    case .startCapture:
+      return strings.operationStartCapture
+    case .createTap:
+      return strings.operationCreateTap
+    case .readTapFormat:
+      return strings.operationReadTapFormat
+    case .readTapUID:
+      return strings.operationReadTapUID
+    case .createAggregateDevice:
+      return strings.operationCreateAggregateDevice
+    case .findAudioProcess:
+      return strings.operationFindAudioProcess
+    case .queryProcessListSize:
+      return strings.operationQueryProcessListSize
+    case .readProcessList:
+      return strings.operationReadProcessList
+    case .readProcessBundleID:
+      return strings.operationReadProcessBundleID
+    }
+  }
+}
+
 struct CoreAudioFailure: LocalizedError {
-  let operation: String
+  let operation: CoreAudioOperation
   let status: OSStatus
 
   var errorDescription: String? {
-    let code = fourCharacterCode(status)
-    return "\(operation)에 실패했습니다. (Core Audio \(code), \(status))"
+    L.s.coreAudioFailure(
+      operation: operation.localizedName,
+      code: fourCharacterCode(status),
+      status: status
+    )
   }
 }
 
 @inline(__always)
-func requireNoErr(_ status: OSStatus, _ operation: String) throws {
+func requireNoErr(
+  _ status: OSStatus,
+  _ operation: CoreAudioOperation
+) throws {
   guard status == noErr else {
     throw CoreAudioFailure(operation: operation, status: status)
   }
@@ -96,7 +141,7 @@ enum CoreAudioProcessCatalog {
         &processID
       )
     }
-    try requireNoErr(status, "앱의 오디오 프로세스 검색")
+    try requireNoErr(status, .findAudioProcess)
     return processID
   }
 
@@ -115,7 +160,7 @@ enum CoreAudioProcessCatalog {
         nil,
         &byteCount
       ),
-      "Core Audio 프로세스 목록 크기 확인"
+      .queryProcessListSize
     )
     guard byteCount > 0 else {
       return []
@@ -133,7 +178,7 @@ enum CoreAudioProcessCatalog {
         buffer.baseAddress!
       )
     }
-    try requireNoErr(status, "Core Audio 프로세스 목록 읽기")
+    try requireNoErr(status, .readProcessList)
     return Array(values.prefix(Int(byteCount) / MemoryLayout<AudioObjectID>.stride))
   }
 
@@ -158,7 +203,7 @@ enum CoreAudioProcessCatalog {
         pointer
       )
     }
-    try requireNoErr(status, "오디오 프로세스 번들 ID 읽기")
+    try requireNoErr(status, .readProcessBundleID)
     return value as String
   }
 }

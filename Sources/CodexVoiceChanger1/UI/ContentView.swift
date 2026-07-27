@@ -3,6 +3,10 @@ import SwiftUI
 struct ContentView: View {
   @ObservedObject var model: AppModel
 
+  private var strings: any AppStringsProviding {
+    model.strings
+  }
+
   var body: some View {
     Group {
       if model.hasAcceptedTerms {
@@ -15,13 +19,13 @@ struct ContentView: View {
     .fixedSize(horizontal: false, vertical: true)
     .frame(minHeight: 690)
     .alert(
-      "RVC를 시작하지 못했습니다",
+      strings.errorAlertTitle,
       isPresented: Binding(
         get: { model.errorText != nil },
         set: { if !$0 { model.errorText = nil } }
       )
     ) {
-      Button("확인", role: .cancel) {
+      Button(strings.okButton, role: .cancel) {
         model.errorText = nil
       }
     } message: {
@@ -37,6 +41,10 @@ struct ContentView: View {
           .foregroundStyle(.tint)
         Text("Codex Voice Changer 1")
           .font(.title2.bold())
+
+        Spacer(minLength: 8)
+
+        languagePicker
       }
 
       GroupBox {
@@ -51,7 +59,10 @@ struct ContentView: View {
               .frame(width: 32, height: 32)
           }
 
-          Picker("캡처할 앱", selection: $model.selectedBundleID) {
+          Picker(
+            strings.captureTargetTitle,
+            selection: $model.selectedBundleID
+          ) {
             ForEach(model.applications) { application in
               Text(application.name)
                 .tag(application.bundleID)
@@ -66,13 +77,16 @@ struct ContentView: View {
           } label: {
             Image(systemName: "arrow.clockwise")
           }
-          .help("실행 중인 앱 새로고침")
+          .help(strings.refreshRunningApps)
           .disabled(model.isRunning)
         }
         .padding(4)
       } label: {
-        Label("캡처할 앱", systemImage: "macwindow.on.rectangle")
-          .font(.headline)
+        Label(
+          strings.captureTargetTitle,
+          systemImage: "macwindow.on.rectangle"
+        )
+        .font(.headline)
       }
 
       VStack(spacing: 10) {
@@ -109,50 +123,53 @@ struct ContentView: View {
           .font(.system(size: 27, weight: .semibold))
           .foregroundStyle(.tint)
         VStack(alignment: .leading, spacing: 2) {
-          Text("시작하기 전 이용규약 동의")
+          Text(strings.consentTitle)
             .font(.title2.bold())
           Text("つくよみちゃん公式RVCモデル（通常1）")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+
+        Spacer(minLength: 8)
+
+        languagePicker
       }
 
-      Text(
-        "이 앱은 츠쿠요미짱 공식 RVC 모델을 사용합니다. RVC 기능을 사용하려면 공식 배포 페이지와 최신 이용규약을 확인하고 명시적으로 동의해야 합니다."
-      )
-      .font(.body)
-      .fixedSize(horizontal: false, vertical: true)
+      Text(strings.consentBody)
+        .font(.body)
+        .fixedSize(horizontal: false, vertical: true)
 
       GroupBox {
         VStack(alignment: .leading, spacing: 12) {
           Label(
-            "변환한 음성을 공개할 때 실제 원음과 공식 모델을 함께 밝혀야 합니다.",
+            strings.consentChecklistCredit,
             systemImage: "person.wave.2"
           )
           Label(
-            "원음의 권리와 이용 조건은 사용자가 별도로 확인해야 합니다.",
+            strings.consentChecklistRights,
             systemImage: "checkmark.shield"
           )
           Label(
-            "공식 최신 이용규약이 이 앱의 요약보다 우선합니다.",
+            strings.consentChecklistPriority,
             systemImage: "exclamationmark.triangle"
           )
         }
         .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(4)
       } label: {
-        Text("확인할 내용")
+        Text(strings.consentChecklistTitle)
           .font(.headline)
       }
 
       HStack(spacing: 14) {
         Link(
-          "공식 배포 페이지 열기",
+          strings.consentOpenModelPage,
           destination: TsukuyomiTermsConsent.modelPageURL
         )
         Link(
-          "공식 이용규약 전문 열기",
+          strings.consentOpenTerms,
           destination: TsukuyomiTermsConsent.termsURL
         )
       }
@@ -160,7 +177,9 @@ struct ContentView: View {
       Spacer(minLength: 0)
 
       Text(
-        "아래 버튼을 누르면 \(TsukuyomiTermsConsent.currentRevision) 검토본을 기준으로 공식 이용규약에 동의한 것으로 이 Mac에 기록됩니다."
+        strings.consentRecordNote(
+          revision: TsukuyomiTermsConsent.currentRevision
+        )
       )
       .font(.caption)
       .foregroundStyle(.secondary)
@@ -170,7 +189,7 @@ struct ContentView: View {
         model.acceptTerms()
       } label: {
         Label(
-          "공식 이용규약에 동의하고 시작",
+          strings.consentAcceptButton,
           systemImage: "checkmark.seal.fill"
         )
         .fontWeight(.semibold)
@@ -183,35 +202,53 @@ struct ContentView: View {
     .padding(24)
   }
 
+  /// The trigger shows only the active language so the fixed 500pt header
+  /// stays intact; the longer "follow macOS" wording lives in the menu.
+  private var languagePicker: some View {
+    Menu {
+      Picker(strings.languageMenuTitle, selection: $model.language) {
+        ForEach(AppLanguage.allCases) { language in
+          Text(language.menuTitle(using: strings))
+            .tag(language)
+        }
+      }
+      .pickerStyle(.inline)
+      .labelsHidden()
+    } label: {
+      Label(model.language.resolved.nativeName, systemImage: "globe")
+        .font(.callout)
+    }
+    .menuStyle(.borderlessButton)
+    .fixedSize()
+    .help(strings.languageMenuTitle)
+    .accessibilityLabel(strings.languageMenuTitle)
+  }
+
   private var voiceCredit: some View {
     VStack(alignment: .leading, spacing: 4) {
       Divider()
         .padding(.bottom, 4)
 
-      Text(
-        "이 소프트웨어에는 프리 소재 캐릭터 「つくよみちゃん」(© Rei Yumesaki)이 무료 공개한 RVC 모델이 포함되어 있습니다."
-      )
-      Text("음성 변환: つくよみちゃん公式RVCモデル（通常1／CV.夢前黎）")
+      Text(strings.creditIncluded)
+      Text(strings.creditVoice)
         .fontWeight(.medium)
       HStack(spacing: 10) {
         Link(
-          "공식 배포 페이지",
+          strings.creditModelPage,
           destination: TsukuyomiTermsConsent.modelPageURL
         )
         Link(
-          "공식 이용규약",
+          strings.creditTerms,
           destination: TsukuyomiTermsConsent.termsURL
         )
       }
-      Text("모델 사용 시 공식 RVC 모델 이용규약을 준수해야 하며, 변환 음성 공개 시 원음 출처와 모델을 함께 표기해야 합니다.")
+      Text(strings.creditCompliance)
     }
     .font(.system(size: 10.5))
     .foregroundStyle(.secondary)
     .fixedSize(horizontal: false, vertical: true)
     .accessibilityElement(children: .combine)
-    .accessibilityLabel(
-      "사용 보이스: つくよみちゃん公式RVCモデル 通常1, CV.夢前黎. 모델 사용 시 공식 이용규약을 준수해야 합니다."
-    )
+    .accessibilityLabel(strings.creditAccessibility)
   }
 
   private var activityIndicator: some View {
@@ -239,13 +276,13 @@ struct ContentView: View {
   private var activityText: String {
     switch model.rvcActivity {
     case .off:
-      return "RVC 엔진 꺼짐"
+      return strings.activityOff
     case .preparing:
-      return "RVC 엔진 가동 준비 중…"
+      return strings.activityPreparing
     case .active:
-      return "RVC 엔진 가동 중"
+      return strings.activityActive
     case .failed:
-      return "RVC 엔진 오류 · 원음 출력 중"
+      return strings.activityFailed
     }
   }
 

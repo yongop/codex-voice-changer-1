@@ -1,0 +1,2 @@
+/* Shown in the macOS permission prompt for system audio recording. */
+"NSAudioCaptureUsageDescription" = "선택한 앱의 출력 음성을 츠쿠요미짱 RVC로 실시간 변환하기 위해 시스템 오디오 접근이 필요합니다. 마이크는 사용하지 않습니다.";
